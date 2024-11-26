@@ -52,8 +52,8 @@ def embedding_dot(embedding1, embedding2, indices):
         return torch.sum(A * B, dim=1)
 
 # Load the CSV file
-data_path = 'ehr_ml/patient2vec/output.csv'
-df = pd.read_csv(data_path)
+#data_path = 'ehr_ml/ehr_ml/patient2vec/output.csv'
+#df = pd.read_csv(data_path)
 n = 20
 
 class SequentialTask(nn.Module):
@@ -478,38 +478,52 @@ class PredictionModel(nn.Module):
             )
 
         return resulting_batch
-    
-if __name__ == '__main__':
-    dataset = df
+
+def generate_embeddings(data_path: str, df: pd.DataFrame, config: Dict[str, Any] = None) -> torch.Tensor:
+    """
+    Generates embeddings for the given dataset.
+
+    Args:
+        data_path (str): Path to the dataset CSV file.
+        df (pd.DataFrame): DataFrame containing the dataset.
+        config (Dict[str, Any], optional): Configuration dictionary for the model. Defaults to None.
+
+    Returns:
+        torch.Tensor: Generated embeddings.
+    """
+    # Prepare the dataset
     non_text_codes = df['code'].astype('category').cat.codes.tolist()
-    non_text_offsets = [0] * len(non_text_codes) 
+    non_text_offsets = [0] * len(non_text_codes)
     non_text_codes1 = df['visit_id_x'].astype('category').cat.codes.tolist()
-    non_text_offsets1 = [0] * len(non_text_codes1) 
-    day_information = [0] * len(non_text_codes)  
-    positional_encoding = [0] * len(non_text_codes)  
-    lengths = [(0, len(non_text_codes))]    
+    non_text_offsets1 = [0] * len(non_text_codes1)
+    day_information = [0] * len(non_text_codes)
+    positional_encoding = [0] * len(non_text_codes)
+    lengths = [(0, len(non_text_codes))]
 
     print('Finished loading data')
 
+    # Define device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
     print('Device:', device)
 
-    config = {
-        "num_first": 1000,  
-        "num_second": 1000,  
-        "size": 512,          
-        "dropout": 0.1,      
-        "use_gru": False,    
-        "gru_layers": 2,      
-        "nhead": 8,         
-        "dim_feedforward": 2048,  
-        "num_encoder_layers": 12, 
-        "num_valid_targets": 1000,
-    }
+    # Default configuration if not provided
+    if config is None:
+        config = {
+            "num_first": 1000,  
+            "num_second": 1000,  
+            "size": 512,          
+            "dropout": 0.1,      
+            "use_gru": False,    
+            "gru_layers": 2,      
+            "nhead": 8,         
+            "dim_feedforward": 2048,  
+            "num_encoder_layers": 12, 
+            "num_valid_targets": 1000,
+        }
 
     info = {}
 
+    # Finalize data preparation
     prepared_data = PatientRNN.finalize_data(
         config=config,
         info=info,
@@ -525,15 +539,48 @@ if __name__ == '__main__':
         )
     )
 
+    # Initialize the model
     use_cuda = torch.cuda.is_available()
     model = PredictionModel(config=config, info=info, use_cuda=use_cuda)
-
     model.to(device)
 
-    model.eval()  
+    # Generate embeddings
+    model.eval()
     with torch.no_grad():
         embeddings = model.compute_embedding_batch(prepared_data)
 
-    print(embeddings)
+    return embeddings
+    
+if __name__ == '__main__':
+    # Load the datasets
+    ehrshot_df = pd.read_csv('ehr_ml/ehr_ml/patientdata/ehrshot_sample.csv')
+    lookup_table_df = pd.read_csv('/Users/Neeral/ehr_ml_project/ehr_ml/ehr_ml/patientdata/lookup-table.csv')
 
+    # Merge DataFrames
+    merged_df = pd.merge(ehrshot_df, lookup_table_df, on='patient_id', how='inner')
+    output_path = 'ehr_ml/ehr_ml/patient2vec/output.csv'
 
+    for i in range(115967095, 121124986):
+        if i in ehrshot_df['patient_id'].values:
+            file_path = f'ehr_ml/ehr_ml/patientdata/patientsgen/{i}.csv'
+            try:
+                # Load the patient-specific CSV
+                firstpatient = pd.read_csv(file_path)
+
+                # Merge with existing data
+                final_df = pd.merge(merged_df, firstpatient, on='patient_id', how='inner')
+
+                # Normalize indices before generating embeddings
+                final_df['code'] = final_df['code'].astype('category').cat.codes
+                final_df['visit_id_x'] = final_df['visit_id_x'].astype('category').cat.codes
+
+                # Write the combined data to output.csv
+                final_df.to_csv(output_path, index=False, mode='w')
+                print(f"Data saved to {output_path}")
+
+                # Generate embeddings using final_df
+                embeddings = generate_embeddings(output_path, final_df)
+                print(f"Embeddings for patient {i}: {embeddings}")
+
+            except Exception as e:
+                print(f"Error processing patient {i}: {e}")
